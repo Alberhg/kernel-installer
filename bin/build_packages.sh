@@ -3,7 +3,7 @@
 set -e
 
 APP_NAME="kernel-installer"
-VERSION="1.0.3"
+VERSION="1.0.4"
 BUILD_DIR="build_packages"
 RPM_BUILD_DIR="$HOME/rpmbuild"
 

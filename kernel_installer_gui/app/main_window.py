@@ -43,6 +43,8 @@ class KernelInstallerWindow(Gtk.ApplicationWindow):
         
         # Load initial data
         GLib.idle_add(self._load_initial_data)
+        
+
     
     def _create_header_bar(self) -> None:
         """Create the header bar with title and actions."""
@@ -129,6 +131,11 @@ class KernelInstallerWindow(Gtk.ApplicationWindow):
         self._cleanup_check = Gtk.CheckButton(label=_("Clean build directory after installation (Save disk space)"))
         self._cleanup_check.set_active(True)
         config_box.pack_start(self._cleanup_check, False, False, 0)
+        
+        # Profile only option
+        self._profile_only_check = Gtk.CheckButton(
+            label=_("Profile only (generate config, build on another machine)"))
+        config_box.pack_start(self._profile_only_check, False, False, 0)
         
         # Separator
         config_box.pack_start(Gtk.Separator(), False, False, 0)
@@ -371,15 +378,46 @@ class KernelInstallerWindow(Gtk.ApplicationWindow):
         # Start build in thread
         custom_name = self.get_kernel_name()
         cleanup = self._cleanup_check.get_active()
+        
+        profile_only = self._profile_only_check.get_active()
+
+        dest_path = None
+        if profile_only:
+            dest_path = self._choose_profile_destination(version)
+            if dest_path is None:
+                return  # user cancelled the save dialog
         def build_thread():
             try:
-                success = self._kernel_manager.full_install(version, profile, custom_name, cleanup)
+                success = self._kernel_manager.full_install(
+                    version, profile, custom_name, cleanup, profile_only=profile_only,  dest_path=dest_path)
                 GLib.idle_add(self._on_build_complete, success)
             except Exception as e:
                 GLib.idle_add(self._on_build_error, str(e))
         
         thread = threading.Thread(target=build_thread, daemon=True)
         thread.start()
+
+    def _choose_profile_destination(self, version):
+        """Ask the user where to save the machine-profile bundle."""
+        import platform
+        dialog = Gtk.FileChooserDialog(
+            title=_("Save machine profile"),
+            transient_for=self,
+            action=Gtk.FileChooserAction.CREATE_FOLDER,
+        )
+        dialog.add_buttons(
+            _("Cancel"), Gtk.ResponseType.CANCEL,
+            _("Save"), Gtk.ResponseType.OK,
+        )
+        default_name = f"machine-profile-{platform.node()}-{version}"
+        dialog.set_current_name(default_name)
+        dialog.set_current_folder(GLib.get_home_dir())
+
+        path = None
+        if dialog.run() == Gtk.ResponseType.OK:
+            path = dialog.get_filename()
+        dialog.destroy()
+        return path
     
     def _confirm_install(self, version: str, profile: KernelProfile) -> bool:
         """Show confirmation dialog."""

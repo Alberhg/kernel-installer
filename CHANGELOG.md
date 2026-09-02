@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-09-01
+
+### Added
+- **Added a profile only mode**: Generate the needed config on the target machine so that the compilation can be done in a different one.
+
 ## [1.0.3] - 2026-01-28
 
 ### Added

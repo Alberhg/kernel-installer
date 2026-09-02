@@ -375,6 +375,123 @@ class KernelManager:
         
         self._report_progress(_("Configuration complete."), 30)
         return True
+
+    def export_profile(self, version, profile, dest_path=None):
+        """Export a portable machine-profile bundle instead of compiling here."""
+        import platform, json
+        from .distro import DistroFamily
+        source_dir = os.path.join(self._build_dir, f"linux-{version}")
+        config_path = os.path.join(source_dir, ".config")
+
+        if not os.path.exists(config_path):
+            self._report_progress(_("Error: no .config to export (run configure first)"), -1)
+            return None
+
+        distro_info = self._distro.detect()
+        if distro_info.family in (DistroFamily.DEBIAN, DistroFamily.UBUNTU):
+            package_format = "bindeb-pkg"
+        elif distro_info.family in (DistroFamily.FEDORA, DistroFamily.MANDRIVA):
+            package_format = "binrpm-pkg"
+        else:
+            package_format = "make"
+
+        custom = getattr(self, "_custom_name", "custom")
+
+        # Destination: caller-provided, else the default auto-path
+        if dest_path:
+            bundle_dir = dest_path
+        else:
+            bundle_dir = os.path.join(
+                self._build_dir, f"machine-profile-{platform.node()}-{version}")
+        ensure_directory(bundle_dir)
+
+        shutil.copy2(config_path, os.path.join(bundle_dir, ".config"))
+
+        manifest = {
+            "kernel_version": version,
+            "target_arch": platform.machine(),
+            "target_distro": distro_info.id,
+            "target_family": distro_info.family.name,
+            "package_format": package_format,
+            "custom_name": custom,
+            "profile_name": profile.name,
+            "profile_suffix": profile.suffix,
+            "generated_by": "kernel-installer profiler",
+        }
+        with open(os.path.join(bundle_dir, "manifest.json"), "w") as f:
+            json.dump(manifest, f, indent=2)
+
+        self._report_progress(_("Profile exported to %(path)s") % {"path": bundle_dir}, 100)
+        return bundle_dir
+        
+        """Export a portable machine-profile bundle instead of compiling here."""
+        import platform, json
+        from .distro import DistroFamily
+        source_dir = os.path.join(self._build_dir, f"linux-{version}")
+        config_path = os.path.join(source_dir, ".config")
+    
+        if not os.path.exists(config_path):
+            self._report_progress(_("Error: no .config to export (run configure first)"), -1)
+            return None
+    
+        distro_info = self._distro.detect()
+        if distro_info.family in (DistroFamily.DEBIAN, DistroFamily.UBUNTU):
+            package_format = "bindeb-pkg"
+        elif distro_info.family in (DistroFamily.FEDORA, DistroFamily.MANDRIVA):
+            package_format = "binrpm-pkg"
+        else:
+            package_format = "make"
+    
+        custom = getattr(self, "_custom_name", "custom")
+        bundle_dir = os.path.join(self._build_dir, f"machine-profile-{platform.node()}-{version}")
+        ensure_directory(bundle_dir)
+        shutil.copy2(config_path, os.path.join(bundle_dir, ".config"))
+    
+        manifest = {
+            "kernel_version": version,
+            "target_arch": platform.machine(),
+            "target_distro": distro_info.id,
+            "target_family": distro_info.family.name,
+            "package_format": package_format,
+            "custom_name": custom,
+            "profile_name": profile.name,
+            "profile_suffix": profile.suffix,
+            "generated_by": "kernel-installer profiler",
+        }
+        with open(os.path.join(bundle_dir, "manifest.json"), "w") as f:
+            json.dump(manifest, f, indent=2)
+    
+        self._report_progress(_("Profile exported to %(path)s") % {"path": bundle_dir}, 100)
+        return bundle_dir
+    
+    
+    def build_from_profile(self, bundle_dir):
+        """Build a kernel on this (powerful) machine from an imported profile."""
+        import json
+        with open(os.path.join(bundle_dir, "manifest.json")) as f:
+            manifest = json.load(f)
+    
+        version = manifest["kernel_version"]
+        self._custom_name = manifest.get("custom_name", "custom")
+        self._cancel_requested = False
+    
+        if not self.download_kernel(version):
+            return False
+    
+        source_dir = os.path.join(self._build_dir, f"linux-{version}")
+        shutil.copy2(os.path.join(bundle_dir, ".config"),
+                     os.path.join(source_dir, ".config"))
+    
+        self._report_progress(_("Running make olddefconfig..."), 28)
+        run_command_with_callback("make olddefconfig", cwd=source_dir)
+    
+        if not self.build_kernel(version):
+            return False
+    
+        from .profiles import get_all_profiles
+        profile = next((p for p in get_all_profiles()
+                        if p.suffix == manifest.get("profile_suffix")), get_all_profiles()[0])
+        return self.install_kernel(version, profile)    
     
     def build_kernel(self, version: str) -> bool:
         """
@@ -620,7 +737,8 @@ class KernelManager:
         self._report_progress(_("Installation complete!"), 100)
         return True
     
-    def full_install(self, version: str, profile: KernelProfile, custom_name: str = "", cleanup: bool = False) -> bool:
+    def full_install(self, version, profile, custom_name="", cleanup=False,
+                 profile_only=False, dest_path=None) -> bool:
         """
         Perform full kernel installation: download, configure, build, install.
         
@@ -639,23 +757,21 @@ class KernelManager:
         
         # 1. Download and Extract
         if not self.download_kernel(version):
-            if self._is_cancelled():
-                self.cleanup_build_files()
+            if self._is_cancelled(): self.cleanup_build_files()
             return False
-        
         if self._is_cancelled():
-            self.cleanup_build_files()
-            return False
-        
+            self.cleanup_build_files(); return False
+
         # 2. Configure
         if not self.configure_kernel(version, profile):
-            if self._is_cancelled():
-                self.cleanup_build_files()
+            if self._is_cancelled(): self.cleanup_build_files()
             return False
-            
         if self._is_cancelled():
-            self.cleanup_build_files()
-            return False
+            self.cleanup_build_files(); return False
+
+        # --- NEW: stop here in profiler mode, export the bundle ---
+        if profile_only:
+                    return self.export_profile(version, profile, dest_path) is not None
         
         # 3. Build
         if not self.build_kernel(version):
